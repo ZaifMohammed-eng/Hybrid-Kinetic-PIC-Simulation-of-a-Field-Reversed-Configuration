@@ -4,6 +4,83 @@ frc_hybrid_pic.py
 Hybrid-kinetic PIC (kinetic ions + massless fluid electrons)
 Field-Reversed Configuration (FRC) simulation built on WarpX/PICMI.
 
+WHY HYBRID-PIC AND NOT FULL EXPLICIT PIC
+----------------------------------------
+At FRC-relevant density/temperature (n ~ 1e22 m^-3, T ~ keV) an explicit
+electromagnetic PIC code must resolve the Debye length lambda_D (~1.7 um here)
+and the electron plasma period 1/w_pe.  For a 2-4 cm device that is ~10^4 cells
+per dimension and a timestep ~1e-13 s -> not tractable, and if you under-resolve
+lambda_D the finite-grid instability heats the plasma artificially.
+
+The hybrid model removes the electron mass (massless fluid electrons obeying a
+generalized Ohm's law).  This DELETES the lambda_D / w_pe constraints.  The grid
+now only needs to resolve the ION inertial length d_i and ion gyro-radius rho_i
+(~ mm here), and the timestep only needs to resolve the ion gyro-period 1/w_ci
+(~40 ns) and the grid-scale whistler (handled by B-field sub-stepping).
+This buys ~3 orders of magnitude and is THE standard tool for kinetic FRC work
+(Belova, Barnes, Milroy; WarpX ohm_solver).
+
+WHAT THIS SCAFFOLD COVERS (and what it physically cannot)
+---------------------------------------------------------
+  RZ (axisymmetric, default)   :  FRC equilibrium, formation/relaxation,
+                                  axial merging + magnetic reconnection,
+                                  adiabatic compression, ion heating,
+                                  D-D fusion, particle/energy confinement,
+                                  radial Bernstein structure, Landau damping.
+  3D (CFG.GEOMETRY="3D")       :  REQUIRED for the TILT (n=1) instability and
+                                  the ROTATIONAL (n=2) mode.  These break
+                                  axisymmetry and CANNOT appear in RZ -- no
+                                  amount of post-processing recovers them.
+
+KINETIC EFFECTS ARE EMERGENT, NOT "ADDED"
+-----------------------------------------
+Ion Landau damping and Ion Bernstein Waves (IBW) are not modules you switch on.
+With kinetic ions they appear automatically PROVIDED the simulation resolves the
+relevant resonance/scale and has low enough velocity-space noise (enough
+particles-per-cell).  What this file adds is (a) resolution that admits them and
+(b) DIAGNOSTICS that measure them (space-time FFT -> w-k dispersion for IBW;
+seeded-perturbation decay fit for Landau damping).
+
+IMPORTANT
+---------
+* `derive_parameters()` is pure NumPy and runs WITHOUT WarpX -- use it to size a
+  run and print the physics report:   python frc_hybrid_pic.py --report
+* The WarpX build/run paths use PICMI.  WarpX's hybrid-solver and fusion-collision
+  keyword names move between versions.  Every such spot is tagged  # VERIFY .
+  Align them with `import pywarpx; print(pywarpx.__version__)` on your machine.
+* Momentum inputs in WarpX are PROPER VELOCITY u = gamma*v in m/s (for v<<c just v
+  in m/s) -- NOT m*v.  (The shared draft multiplied by electron mass; that zeroes
+  the drift.  Fixed throughout here.)
+* VIDEO OUTPUT: MP4 needs ffmpeg on PATH; without it the same animations are
+  written as GIFs through Pillow (ships with matplotlib).  Disable all video
+  with CFG.VIDEO = False (the static PNGs are always produced).
+  
+  CHANGELOG (this revision -- adds VIDEO post-processing):
+  [ADD-1] Diagnostics now caches 2D field SNAPSHOTS (B_z and E_r) every
+          DIAG_EVERY steps -- videos need the time-resolved fields, not just
+          the scalar traces.  Memory is bounded by CFG.VIDEO_MAX_FRAMES via
+          stride-doubling (when the cap is hit, every other stored frame is
+          dropped and the capture stride doubles, so storage never exceeds
+          ~VIDEO_MAX_FRAMES frames regardless of MAX_STEPS).
+  [ADD-2] post_process() now renders an ANIMATION for every diagnostic, in
+          addition to the original final-state PNGs:
+            frc_fields.(mp4|gif)        B_z(r,z) colormap + poloidal-flux
+                                        (psi) contours evolving in time --
+                                        shows formation/relaxation, merging,
+                                        reconnection, separatrix motion
+            frc_er_fields.(mp4|gif)     E_r(r,z) evolution (radial Bernstein
+                                        structure becomes visible here)
+            frc_energy.(mp4|gif)        growing magnetic / ion-kinetic
+                                        energy-partition traces
+            frc_ion_heating.(mp4|gif)   growing T_i(t) trace
+            frc_bernstein.(mp4|gif)     cumulative |E_r(w)|^2 spectrum --
+                                        watch the n*w_ci harmonic peaks
+                                        sharpen as the time window grows
+            frc_reconnection.(mp4|gif)  midplane-flux trace (merging only)
+          MP4 is written when ffmpeg is on PATH (matplotlib FFMpegWriter);
+          otherwise an animated GIF is written via PillowWriter -- no new
+          hard dependency either way.
+
 CHANGELOG (this revision -- incorporates 9 critical physics/numeric fixes):
   [FIX-1]  Merged scenarios now correctly use a 2D analytic flux function
            (racetrack closure via z^4) to establish a true separatrix.
@@ -20,8 +97,8 @@ CHANGELOG (this revision -- incorporates 9 critical physics/numeric fixes):
   [FIX-9a] _field_video valid-frame zipping synchronized.
   [FIX-9b] Poloidal flux comment corrected to left Riemann sum.
   [FIX-9c] Full radial line-out of Er stored for future w-k 2D FFTs.
-  [FIX-9e] Precedence trap parenthesized in register_dd_fusion.
-"""
+  [FIX-9e] Precedence trap parenthesized in register_dd_fusion."""
+
 
 from __future__ import annotations
 import argparse
